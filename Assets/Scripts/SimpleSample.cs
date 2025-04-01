@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -14,16 +16,28 @@ namespace Rudp2p
     {
         [SerializeField] private int _port = 12345;
         [SerializeField] private int _port2 = 23456;
+        [SerializeField] private bool _overrideTargetIp = false;
         [SerializeField] private string _targetIp = "127.0.0.1";
 
         private Rudp2pClient _client;
         private Rudp2pClient _client2;
-        private Stopwatch _stopwatch = new();
-        private Stopwatch _stopwatch2 = new();
+        private readonly Stopwatch _stopwatch = new();
+        private readonly Stopwatch _stopwatch2 = new();
         private readonly List<IDisposable> _disposables = new();
 
         private void Start()
         {
+            if (_overrideTargetIp)
+            {
+                string hostName = Dns.GetHostName();
+                IPHostEntry hostEntry = Dns.GetHostEntry(hostName);
+                var firstIPv4 = hostEntry.AddressList.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork);
+                if (firstIPv4 != null)
+                {
+                    _targetIp = firstIPv4.ToString();
+                }
+            }
+
             _client = new Rudp2pClient();
             _client.Start(_port);
             var d1 = _client.RegisterCallback(0, data =>
