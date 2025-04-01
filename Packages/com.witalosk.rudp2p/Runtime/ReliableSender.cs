@@ -12,8 +12,8 @@ namespace Rudp2p
     {
         private readonly SendQueue _sendQueue = new(1250000, 625000);
         private readonly Dictionary<int, bool[]> _ackReceived = new();
-        
-        public async Task Send(UdpClient udp, IPEndPoint target, int key, byte[] data, int mtu = 1500, bool isReliable = true)
+
+        public async Task Send(UdpClient udp, IPEndPoint target, int key, byte[] data, int sendIndex, int mtu = 1500, bool isReliable = true)
         {
             if (data.Length > mtu * ushort.MaxValue - Packet.HeaderSize)
             {
@@ -32,7 +32,7 @@ namespace Rudp2p
                 int arraySize = size + Packet.HeaderSize;
                 
                 byte[] packet = ArrayPool<byte>.Shared.Rent(arraySize);
-                Packet.SetHeader(ref packet, packetId, (ushort)i, (ushort)totalPackets, key);
+                Packet.SetHeader(ref packet, packetId, sendIndex, (ushort)i, (ushort)totalPackets, key);
                 Buffer.BlockCopy(data, offset, packet, Packet.HeaderSize, size);
 
                 if (isReliable)

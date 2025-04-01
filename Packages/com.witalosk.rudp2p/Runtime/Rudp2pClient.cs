@@ -25,8 +25,10 @@ namespace Rudp2p
         private CancellationTokenSource _cts;
         private ConcurrentDictionary<int, PacketMerger> _packetMergers;
         private readonly Dictionary<int, List<Action<byte[]>>> _callbacks = new();
+        private readonly Dictionary<int, List<Action<int, byte[]>>> _callbacksWithSendIndex = new();
         private ReliableSender _reliableSender;
         private SynchronizationContext _originalContext;
+        private Dictionary<IPEndPoint, int> _sendIndices = new();
 
         public void Start(int port)
         {
@@ -35,6 +37,7 @@ namespace Rudp2p
             _reliableSender = new ReliableSender();
             _udpClient = new UdpClient(port);
             _originalContext = SynchronizationContext.Current;
+            _sendIndices = new Dictionary<IPEndPoint, int>();
 
             if (_cts != null) return;
             _cts = new CancellationTokenSource();
@@ -66,12 +69,29 @@ namespace Rudp2p
             _callbacks[key].Add(callback);
             return new CallbackDisposer(this, callback);
         }
+        public IDisposable RegisterCallbackWithSendIndex(int key, Action<int, byte[]> callbackWithSendIndex)
+        {
+            if (!_callbacksWithSendIndex.ContainsKey(key))
+            {
+                _callbacksWithSendIndex[key] = new List<Action<int, byte[]>>();
+            }
+
+            _callbacksWithSendIndex[key].Add(callbackWithSendIndex);
+            return new CallbackWithSendIndexDisposer(this, callbackWithSendIndex);
+        }
 
         public void UnregisterCallback(Action<byte[]> callback)
         {
             foreach (int key in _callbacks.Keys)
             {
                 _callbacks[key].Remove(callback);
+            }
+        }
+        public void UnregisterCallbackWithSendIndex(Action<int, byte[]> callback)
+        {
+            foreach (int key in _callbacksWithSendIndex.Keys)
+            {
+                _callbacksWithSendIndex[key].Remove(callback);
             }
         }
 
@@ -115,6 +135,13 @@ namespace Rudp2p
                         callback(completeData);
                     }
                 }
+                if (_callbacksWithSendIndex.TryGetValue(header.Key, out List<Action<int, byte[]>> callback2))
+                {
+                    foreach (var callback in callback2)
+                    {
+                        callback(header.SendIndex, completeData);
+                    }
+                }
 
                 _packetMergers.TryRemove(header.PacketId, out _);
             }
@@ -122,13 +149,15 @@ namespace Rudp2p
 
         public void Send(IPEndPoint target, int key, byte[] data, bool isReliable = true)
         {
-            Task.Run(() => _reliableSender.Send(_udpClient, target, key, data, Mtu, isReliable));
+            int sendIndex = _sendIndices.GetValueOrDefault(target, 0);
+            _sendIndices[target] = sendIndex + 1;
+            Task.Run(() => _reliableSender.Send(_udpClient, target, key, data, sendIndex, Mtu, isReliable));
         }
 
         private void SendAck(IPEndPoint sender, int packetId, int seq)
         {
             byte[] ackPacket = new byte[Packet.HeaderSize];
-            Packet.SetHeader(ref ackPacket, packetId, (ushort)seq, 0, 0);
+            Packet.SetHeader(ref ackPacket, packetId, 0, (ushort)seq, 0, 0);
             _udpClient.Send(ackPacket, ackPacket.Length, sender);
         }
 
@@ -146,6 +175,22 @@ namespace Rudp2p
             public void Dispose()
             {
                 _parent.UnregisterCallback(_callback);
+            }
+        }
+        public class CallbackWithSendIndexDisposer : IDisposable
+        {
+            private readonly Rudp2pClient _parent;
+            private readonly Action<int, byte[]> _callbackWithSendIndex;
+
+            public CallbackWithSendIndexDisposer(Rudp2pClient parent, Action<int, byte[]> callback)
+            {
+                _parent = parent;
+                _callbackWithSendIndex = callback;
+            }
+
+            public void Dispose()
+            {
+                _parent.UnregisterCallbackWithSendIndex(_callbackWithSendIndex);
             }
         }
     }
