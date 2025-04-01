@@ -1,32 +1,51 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 
 namespace Rudp2p
 {
     internal class PacketMerger
     {
-        public bool IsComplete => _receivedFlags.All(f => f);
-        
+        private readonly object _lockObject = new();
+
+        public bool IsComplete
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _receivedFlags.All(f => f);
+                }
+            }
+        }
+
         private readonly byte[][] _receivedPackets;
         private readonly bool[] _receivedFlags;
-        
+
         public PacketMerger(int totalSeqNum)
         {
             _receivedPackets = new byte[totalSeqNum][];
             _receivedFlags = new bool[totalSeqNum];
         }
-        
+
         public bool AddPacket(int seqNum, byte[] data)
         {
-            _receivedPackets[seqNum] = data;
-            _receivedFlags[seqNum] = true;
-            return IsComplete;
+            lock (_lockObject)
+            {
+                if (_receivedFlags[seqNum] || seqNum < 0 || seqNum >= _receivedPackets.Length)
+                {
+                    return false;
+                }
+                _receivedPackets[seqNum] = data;
+                _receivedFlags[seqNum] = true;
+                return IsComplete;
+            }
         }
-        
+
         public byte[] GetMergedData()
         {
-            return _receivedPackets.SelectMany(p => p).ToArray();
+            lock (_lockObject)
+            {
+                return _receivedPackets.SelectMany(p => p).ToArray();
+            }
         }
     }
 }
