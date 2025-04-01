@@ -12,14 +12,14 @@ namespace Rudp2p
     {
         private readonly SendQueue _sendQueue = new(1250000, 625000);
         private readonly Dictionary<int, bool[]> _ackReceived = new();
-        
+
         public async Task Send(UdpClient udp, IPEndPoint target, int key, byte[] data, int mtu = 1500, bool isReliable = true)
         {
             if (data.Length > mtu * ushort.MaxValue - Packet.HeaderSize)
             {
                 throw new Exception($"Data is too large to send (Max size: {mtu * ushort.MaxValue - Packet.HeaderSize} bytes)");
             }
-            
+
             int packetId = new Random().Next();
             int packetSize = mtu - Packet.HeaderSize;
             int totalPackets = (data.Length + packetSize - 1) / packetSize;
@@ -30,7 +30,7 @@ namespace Rudp2p
                 int offset = i * packetSize;
                 int size = Math.Min(packetSize, data.Length - offset);
                 int arraySize = size + Packet.HeaderSize;
-                
+
                 byte[] packet = ArrayPool<byte>.Shared.Rent(arraySize);
                 Packet.SetHeader(ref packet, packetId, (ushort)i, (ushort)totalPackets, key);
                 Buffer.BlockCopy(data, offset, packet, Packet.HeaderSize, size);
@@ -46,15 +46,15 @@ namespace Rudp2p
 
                 ArrayPool<byte>.Shared.Return(packet);
             }
-            
+
             _ackReceived.Remove(packetId);
         }
-        
+
         public void ReportAck(int packetId, int seq)
         {
             _ackReceived[packetId][seq] = true;
         }
-        
+
         public void Dispose()
         {
             _sendQueue?.Dispose();
@@ -67,10 +67,10 @@ namespace Rudp2p
                 await _sendQueue.Enqueue(udp, target, packet, packetSize);
 
                 int elapsedMs = 0;
-                while (!ackReceived[seq] && elapsedMs < 100)
+                while (!ackReceived[seq] && elapsedMs < 50)
                 {
-                    await Task.Delay(5);
-                    elapsedMs += 5;
+                    await Task.Delay(1);
+                    elapsedMs += 1;
                 }
 
                 if (ackReceived[seq]) break;

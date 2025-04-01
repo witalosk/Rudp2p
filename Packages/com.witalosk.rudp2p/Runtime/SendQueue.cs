@@ -37,7 +37,7 @@ namespace Rudp2p
                     while (!_tokenBucket.TryConsume(item.Data.Length))
                     {
                         // Wait until the token is available
-                        await Task.Delay(10);
+                        await Task.Delay(1);
                     }
 
                     try
@@ -49,10 +49,6 @@ namespace Rudp2p
                     {
                         item.Tcs.SetException(e);
                     }
-                }
-                else
-                {
-                    await Task.Delay(10);
                 }
             }
         }
