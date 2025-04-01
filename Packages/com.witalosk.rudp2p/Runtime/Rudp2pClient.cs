@@ -28,6 +28,11 @@ namespace Rudp2p
         private ReliableSender _reliableSender;
         private SynchronizationContext _originalContext;
 
+        private readonly TimeSpan _cleanupInterval = TimeSpan.FromMilliseconds(100);
+        private readonly TimeSpan _processedIdTimeout = TimeSpan.FromSeconds(1);
+        private CancellationTokenSource _cleanupCts;
+        private readonly ConcurrentDictionary<int, DateTime> _processedPacketIds = new();
+
         public void Start(int port)
         {
             _port = port;
@@ -35,10 +40,15 @@ namespace Rudp2p
             _reliableSender = new ReliableSender();
             _udpClient = new UdpClient(port);
             _originalContext = SynchronizationContext.Current;
+            _processedPacketIds.Clear();
 
             if (_cts != null) return;
             _cts = new CancellationTokenSource();
             Task.Run(() => ReceiveLoop(_cts.Token));
+
+            if (_cleanupCts != null) return;
+            _cleanupCts = new CancellationTokenSource();
+            Task.Run(() => CleanupLoopProcessedPacketIds(_cleanupCts.Token));
         }
 
         public void Close()
@@ -49,6 +59,9 @@ namespace Rudp2p
             _cts = null;
             _udpClient?.Close();
             _udpClient = null;
+            _cleanupCts?.Cancel();
+            _cleanupCts?.Dispose();
+            _cleanupCts = null;
         }
 
         public void Dispose()
@@ -95,19 +108,24 @@ namespace Rudp2p
                 return;
             }
 
+            if (_processedPacketIds.ContainsKey(header.PacketId))
+            {
+                SendAck(sender, header.PacketId, header.SeqId);
+                return;
+            }
+
             byte[] payload = new byte[data.Length - Packet.HeaderSize];
             Buffer.BlockCopy(data, Packet.HeaderSize, payload, 0, payload.Length);
 
             SendAck(sender, header.PacketId, header.SeqId);
 
-            if (!_packetMergers.ContainsKey(header.PacketId))
-            {
-                _packetMergers[header.PacketId] = new PacketMerger(header.TotalSeqNum);
-            }
+            var packetMerger = _packetMergers.GetOrAdd(header.PacketId, _ => new PacketMerger(header.TotalSeqNum));
 
-            if (_packetMergers[header.PacketId].AddPacket(header.SeqId, payload))
+            if (packetMerger.AddPacket(header.SeqId, payload))
             {
-                byte[] completeData = _packetMergers[header.PacketId].GetMergedData();
+                _processedPacketIds.TryAdd(header.PacketId, DateTime.Now);
+
+                byte[] completeData = packetMerger.GetMergedData();
                 if (_callbacks.TryGetValue(header.Key, out List<Action<byte[]>> callback1))
                 {
                     foreach (var callback in callback1)
@@ -130,6 +148,31 @@ namespace Rudp2p
             byte[] ackPacket = new byte[Packet.HeaderSize];
             Packet.SetHeader(ref ackPacket, packetId, (ushort)seq, 0, 0);
             _udpClient.Send(ackPacket, ackPacket.Length, sender);
+        }
+
+        private async Task CleanupLoopProcessedPacketIds(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(_cleanupInterval, token);
+
+                    DateTime cutoffTime = DateTime.Now - _processedIdTimeout;
+
+                    foreach (var pair in _processedPacketIds)
+                    {
+                        if (pair.Value < cutoffTime)
+                        {
+                            _processedPacketIds.TryRemove(pair.Key, out _);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
         }
 
         public class CallbackDisposer : IDisposable
