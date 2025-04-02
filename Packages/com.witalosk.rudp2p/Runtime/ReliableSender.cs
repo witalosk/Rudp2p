@@ -25,32 +25,39 @@ namespace Rudp2p
             int singlePayloadSize = mtu - PacketHeader.Size;
             int totalPackets = (data.Length + singlePayloadSize - 1) / singlePayloadSize;
             _ackReceived[packetId] = ArrayPool<bool>.Shared.Rent(totalPackets);
-            byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(mtu);
-            var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, mtu);
+            List<byte[]> sendBuffers = new();
 
             try
             {
+                List<Task> tasks = new();
                 for (int i = 0; i < totalPackets; i++)
                 {
+                    byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(mtu);
+                    sendBuffers.Add(sendBuffer);
+                    var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, mtu);
+
                     int srcOffset = i * singlePayloadSize;
                     int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
 
                     PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(packetId, (ushort)i, (ushort)totalPackets, key));
                     data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
 
-                    if (isReliable)
-                    {
-                        await SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId]);
-                    }
-                    else
-                    {
-                        await _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]);
-                    }
+                    tasks.Add
+                    (
+                        isReliable
+                        ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                        : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
+                    );
                 }
+
+                await Task.WhenAll(tasks);
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(sendBuffer);
+                foreach (byte[] sendBuffer in sendBuffers)
+                {
+                    ArrayPool<byte>.Shared.Return(sendBuffer);
+                }
                 ArrayPool<bool>.Shared.Return(_ackReceived[packetId]);
                 _ackReceived.Remove(packetId);
             }
