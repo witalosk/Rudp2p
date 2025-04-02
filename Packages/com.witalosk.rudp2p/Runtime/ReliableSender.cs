@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using UnityEngine;
 using Random = System.Random;
 
 namespace Rudp2p
@@ -13,41 +14,46 @@ namespace Rudp2p
         private readonly SendQueue _sendQueue = new(1250000, 625000);
         private readonly Dictionary<int, bool[]> _ackReceived = new();
 
-        public async Task Send(UdpClient udp, IPEndPoint target, int key, byte[] data, int mtu = 1500, bool isReliable = true)
+        public async Task Send(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, int mtu = 1500, bool isReliable = true)
         {
-            if (data.Length > mtu * ushort.MaxValue - Packet.HeaderSize)
+            if (data.Length > mtu * ushort.MaxValue - PacketHeader.Size)
             {
-                throw new Exception($"Data is too large to send (Max size: {mtu * ushort.MaxValue - Packet.HeaderSize} bytes)");
+                throw new Exception($"Data is too large to send (Max size: {mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
             }
 
             int packetId = new Random().Next();
-            int packetSize = mtu - Packet.HeaderSize;
-            int totalPackets = (data.Length + packetSize - 1) / packetSize;
-            _ackReceived[packetId] = new bool[totalPackets];
+            int singlePayloadSize = mtu - PacketHeader.Size;
+            int totalPackets = (data.Length + singlePayloadSize - 1) / singlePayloadSize;
+            _ackReceived[packetId] = ArrayPool<bool>.Shared.Rent(totalPackets);
+            byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(mtu);
+            var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, mtu);
 
-            for (int i = 0; i < totalPackets; i++)
+            try
             {
-                int offset = i * packetSize;
-                int size = Math.Min(packetSize, data.Length - offset);
-                int arraySize = size + Packet.HeaderSize;
-
-                byte[] packet = ArrayPool<byte>.Shared.Rent(arraySize);
-                Packet.SetHeader(ref packet, packetId, (ushort)i, (ushort)totalPackets, key);
-                Buffer.BlockCopy(data, offset, packet, Packet.HeaderSize, size);
-
-                if (isReliable)
+                for (int i = 0; i < totalPackets; i++)
                 {
-                    await SendWithRetry(udp, packet, arraySize, target, i, _ackReceived[packetId]);
-                }
-                else
-                {
-                    await _sendQueue.Enqueue(udp, target, packet, arraySize);
-                }
+                    int srcOffset = i * singlePayloadSize;
+                    int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
 
-                ArrayPool<byte>.Shared.Return(packet);
+                    PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(packetId, (ushort)i, (ushort)totalPackets, key));
+                    data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
+
+                    if (isReliable)
+                    {
+                        await SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId]);
+                    }
+                    else
+                    {
+                        await _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]);
+                    }
+                }
             }
-
-            _ackReceived.Remove(packetId);
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(sendBuffer);
+                ArrayPool<bool>.Shared.Return(_ackReceived[packetId]);
+                _ackReceived.Remove(packetId);
+            }
         }
 
         public void ReportAck(int packetId, int seq)
@@ -60,11 +66,11 @@ namespace Rudp2p
             _sendQueue?.Dispose();
         }
 
-        private async Task SendWithRetry(UdpClient udp, byte[] packet, int packetSize, IPEndPoint target, int seq, bool[] ackReceived)
+        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, bool[] ackReceived)
         {
             for (int tryNum = 0; tryNum < 5; tryNum++)
             {
-                await _sendQueue.Enqueue(udp, target, packet, packetSize);
+                await _sendQueue.Enqueue(client, target, packet);
 
                 int elapsedMs = 0;
                 while (!ackReceived[seq] && elapsedMs < 50)

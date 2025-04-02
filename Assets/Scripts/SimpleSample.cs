@@ -43,7 +43,7 @@ namespace Rudp2p
             var d1 = _client.RegisterCallback(0, data =>
             {
                 _stopwatch2.Stop();
-                _receivedText = System.Text.Encoding.UTF8.GetString(data);
+                _receivedText = System.Text.Encoding.UTF8.GetString(data.Span);
                 Debug.Log($"Received {_receivedText.Length} char from client2 ({_stopwatch2.ElapsedMilliseconds}ms)");
             });
             _disposables.Add(d1);
@@ -53,7 +53,7 @@ namespace Rudp2p
             var d2 = _client2.RegisterCallback(0, data =>
             {
                 _stopwatch.Stop();
-                _receivedText2 = System.Text.Encoding.UTF8.GetString(data);
+                _receivedText2 = System.Text.Encoding.UTF8.GetString(data.Span);
                 Debug.Log($"Received {_receivedText2.Length} char from client1 ({_stopwatch.ElapsedMilliseconds}ms)");
             });
             _disposables.Add(d2);
