@@ -25,20 +25,30 @@ public class SampleClass : MonoBehaviour
         _client.RegisterCallback(0, OnDataReceive);
     }
 
-    private void SendData()
+    private async void SendData()
     {
-        _client.Send(
+        await _client.SendAsync(
             new IPEndPoint(IPAddress.Parse("127.0.0.1"), 6666), // the destination
             0,  // this is a type parameter to distinguish the contents of the data.
             Encoding.GetEncoding("UTF-8").GetBytes("Happy Coding!"),   // data to send
             true    // if true, the client attempts to retransmit if the transmission fails.
         );
     }
+    
+    private void SendWithoutWaiting()
+    {
+        _client.SendAndForgetAsync(
+            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 6666),
+            0,
+            Encoding.GetEncoding("UTF-8").GetBytes("Happy Coding!"),
+            true
+        );
+    }
 
-    private void OnDataReceive(Action<byte[]> data)
+    private void OnDataReceive(Rudp2pReceiveData data)
     {
         // if necessary, it should switch to the main thread. (by SynchronizationContext)
-        Debug.Log(Encoding.GetEncoding("UTF-8").GetString(data));
+        Debug.Log(Encoding.GetEncoding("UTF-8").GetString(data.Data));
     }
 
     private void OnDestroy()

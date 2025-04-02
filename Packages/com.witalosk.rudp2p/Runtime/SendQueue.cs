@@ -4,12 +4,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using UnityEngine;
 
 namespace Rudp2p
 {
     internal class SendQueue : IDisposable
     {
-        private readonly ConcurrentQueue<(UdpClient Client, byte[] Data, int DataLength, IPEndPoint EndPoint, TaskCompletionSource<bool> Tcs)> _queue = new();
+        private readonly ConcurrentQueue<(Socket Client, ArraySegment<byte> Data, IPEndPoint EndPoint, TaskCompletionSource<bool> Tcs)> _queue = new();
         private readonly TokenBucket _tokenBucket;
         private readonly CancellationTokenSource _cts;
 
@@ -21,10 +22,10 @@ namespace Rudp2p
             Task.Run(ProcessQueue);
         }
 
-        public Task Enqueue(UdpClient client, IPEndPoint target, byte[] data, int dataLength)
+        public Task Enqueue(Socket client, IPEndPoint target, ArraySegment<byte> data)
         {
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _queue.Enqueue((client, data, dataLength, target, tcs));
+            _queue.Enqueue((client, data, target, tcs));
             return tcs.Task;
         }
 
@@ -34,25 +35,21 @@ namespace Rudp2p
             {
                 if (_queue.TryDequeue(out var item))
                 {
-                    while (!_tokenBucket.TryConsume(item.Data.Length))
+                    while (!_tokenBucket.TryConsume(item.Data.Count))
                     {
                         // Wait until the token is available
-                        await Task.Delay(10);
+                        await Task.Delay(1);
                     }
 
                     try
                     {
-                        await item.Client.SendAsync(item.Data, item.DataLength, item.EndPoint);
+                        await item.Client.SendToAsync(item.Data, SocketFlags.None, item.EndPoint);
                         item.Tcs.SetResult(true);
                     }
                     catch (Exception e)
                     {
                         item.Tcs.SetException(e);
                     }
-                }
-                else
-                {
-                    await Task.Delay(10);
                 }
             }
         }

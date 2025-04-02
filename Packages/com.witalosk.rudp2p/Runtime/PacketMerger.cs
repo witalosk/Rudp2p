@@ -1,32 +1,53 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System;
 
 namespace Rudp2p
 {
     internal class PacketMerger
     {
-        public bool IsComplete => _receivedFlags.All(f => f);
-        
-        private readonly byte[][] _receivedPackets;
-        private readonly bool[] _receivedFlags;
-        
-        public PacketMerger(int totalSeqNum)
+        public int ReceivedSize { get; private set; } = 0;
+
+        private readonly ReadOnlyMemory<byte>[] _receivedPackets;
+        private readonly ushort _totalSegNum = 0;
+        private int _receivedCount = 0;
+
+        private readonly object _lockObject = new object();
+
+        public PacketMerger(ushort totalSegNum)
         {
-            _receivedPackets = new byte[totalSeqNum][];
-            _receivedFlags = new bool[totalSeqNum];
+            _totalSegNum = totalSegNum;
+            _receivedPackets = new ReadOnlyMemory<byte>[_totalSegNum];
+            ReceivedSize = 0;
         }
-        
-        public bool AddPacket(int seqNum, byte[] data)
+
+        public bool AddPacket(int seqNum, ReadOnlyMemory<byte> payload)
         {
-            _receivedPackets[seqNum] = data;
-            _receivedFlags[seqNum] = true;
-            return IsComplete;
+            lock (_lockObject)
+            {
+                if (seqNum < 0 || seqNum >= _totalSegNum || !_receivedPackets[seqNum].IsEmpty)
+                {
+                    return false;
+                }
+
+                _receivedPackets[seqNum] = payload;
+                ReceivedSize += payload.Length;
+
+                return ++_receivedCount == _totalSegNum;
+            }
         }
-        
-        public byte[] GetMergedData()
+
+        public void SetMergedData(Span<byte> target)
         {
-            return _receivedPackets.SelectMany(p => p).ToArray();
+            lock (_lockObject)
+            {
+                int offset = 0;
+                foreach (var packet in _receivedPackets)
+                {
+                    if (packet.IsEmpty) return;
+
+                    packet.Span.CopyTo(target[offset..]);
+                    offset += packet.Length;
+                }
+            }
         }
     }
 }

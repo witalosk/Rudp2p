@@ -1,7 +1,7 @@
 ﻿{
   "name": "com.witalosk.rudp2p",
   "displayName": "Rudp2p",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "unity": "2021.1",
   "description": "Reliable, unordered, datagram protocol for peer-to-peer communication based on UDP",
   "author": {
