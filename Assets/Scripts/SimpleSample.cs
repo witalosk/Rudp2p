@@ -18,6 +18,8 @@ namespace Rudp2p
         [SerializeField] private int _port2 = 23456;
         [SerializeField] private bool _overrideTargetIp = false;
         [SerializeField] private string _targetIp = "127.0.0.1";
+        [Space]
+        [SerializeField] private Rudp2pConfig _config = new Rudp2pConfig();
 
         private Rudp2pClient _client;
         private Rudp2pClient _client2;
@@ -38,7 +40,7 @@ namespace Rudp2p
                 }
             }
 
-            _client = new Rudp2pClient();
+            _client = new Rudp2pClient(_config);
             _client.Start(_port);
             var d1 = _client.RegisterCallback(0, data =>
             {
@@ -48,7 +50,7 @@ namespace Rudp2p
             });
             _disposables.Add(d1);
 
-            _client2 = new Rudp2pClient();
+            _client2 = new Rudp2pClient(_config);
             _client2.Start(_port2);
             var d2 = _client2.RegisterCallback(0, data =>
             {

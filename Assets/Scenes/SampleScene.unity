@@ -356,6 +356,9 @@ MonoBehaviour:
   _port2: 23456
   _overrideTargetIp: 1
   _targetIp: 127.0.0.1
+  _config:
+    Mtu: 1400
+    ParallelSending: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

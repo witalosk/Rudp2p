@@ -15,11 +15,6 @@ namespace Rudp2p
     /// </summary>
     public class Rudp2pClient : IDisposable
     {
-        /// <summary>
-        /// Maximum Transmission Unit (MTU) in bytes
-        /// </summary>
-        public int Mtu { get; set; } = 2000;
-
         private Socket _socket;
         private IPEndPoint _remoteEndPoint;
         private int _port;
@@ -33,6 +28,15 @@ namespace Rudp2p
         private readonly TimeSpan _processedIdTimeout = TimeSpan.FromSeconds(1);
         private CancellationTokenSource _cleanupCts;
         private readonly ConcurrentDictionary<int, DateTime> _processedPacketIds = new();
+
+        private Rudp2pConfig _config = new();
+
+        public Rudp2pClient() { }
+
+        public Rudp2pClient(Rudp2pConfig config)
+        {
+            _config = config;
+        }
 
         public void Start(int port)
         {
@@ -113,7 +117,7 @@ namespace Rudp2p
 
         private async Task ReceiveLoop(CancellationToken token)
         {
-            byte[] receiveBuffer = new byte[Mtu + 100];
+            byte[] receiveBuffer = new byte[_config.Mtu + 100];
             ArraySegment<byte> receiveSegment = new(receiveBuffer);
             EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
 
@@ -184,7 +188,7 @@ namespace Rudp2p
 
         public void Send(IPEndPoint target, int key, byte[] data, bool isReliable = true)
         {
-            Task.Run(() => _reliableSender.Send(_socket, target, key, data, Mtu, isReliable));
+            Task.Run(() => _reliableSender.SendAsync(_socket, target, key, data, _config, isReliable));
         }
 
         private void SendAck(IPEndPoint sender, int packetId, int seq)

@@ -14,15 +14,15 @@ namespace Rudp2p
         private readonly SendQueue _sendQueue = new(1250000, 625000);
         private readonly Dictionary<int, bool[]> _ackReceived = new();
 
-        public async Task Send(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, int mtu = 1500, bool isReliable = true)
+        public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, Rudp2pConfig config, bool isReliable = true)
         {
-            if (data.Length > mtu * ushort.MaxValue - PacketHeader.Size)
+            if (data.Length > config.Mtu * ushort.MaxValue - PacketHeader.Size)
             {
-                throw new Exception($"Data is too large to send (Max size: {mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
+                throw new Exception($"Data is too large to send (Max size: {config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
             }
 
             int packetId = new Random().Next();
-            int singlePayloadSize = mtu - PacketHeader.Size;
+            int singlePayloadSize = config.Mtu - PacketHeader.Size;
             int totalPackets = (data.Length + singlePayloadSize - 1) / singlePayloadSize;
             _ackReceived[packetId] = ArrayPool<bool>.Shared.Rent(totalPackets);
             List<byte[]> sendBuffers = new();
@@ -32,9 +32,9 @@ namespace Rudp2p
                 List<Task> tasks = new();
                 for (int i = 0; i < totalPackets; i++)
                 {
-                    byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(mtu);
+                    byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(config.Mtu);
                     sendBuffers.Add(sendBuffer);
-                    var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, mtu);
+                    var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, config.Mtu);
 
                     int srcOffset = i * singlePayloadSize;
                     int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
@@ -42,15 +42,24 @@ namespace Rudp2p
                     PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(packetId, (ushort)i, (ushort)totalPackets, key));
                     data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
 
-                    tasks.Add
-                    (
-                        isReliable
-                        ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
-                        : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
-                    );
+                    if (config.ParallelSending)
+                    {
+                        tasks.Add
+                        (
+                            isReliable
+                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                                : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
+                        );
+                    }
+                    else
+                    {
+                        await (isReliable
+                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                            : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]));
+                    }
                 }
 
-                await Task.WhenAll(tasks);
+                if (config.ParallelSending) { await Task.WhenAll(tasks); }
             }
             finally
             {
