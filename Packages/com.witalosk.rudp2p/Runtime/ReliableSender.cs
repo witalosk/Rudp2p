@@ -74,7 +74,8 @@ namespace Rudp2p
 
         public void ReportAck(int packetId, int seq)
         {
-            _ackReceived[packetId][seq] = true;
+            if (!_ackReceived.TryGetValue(packetId, out bool[] value)) return;
+            value[seq] = true;
         }
 
         public void Dispose()

@@ -45,8 +45,8 @@ namespace Rudp2p
             var d1 = _client.RegisterCallback(0, data =>
             {
                 _stopwatch2.Stop();
-                _receivedText = System.Text.Encoding.UTF8.GetString(data.Span);
-                Debug.Log($"Received {_receivedText.Length} char from client2 ({_stopwatch2.ElapsedMilliseconds}ms)");
+                _receivedText = System.Text.Encoding.UTF8.GetString(data.Data.Span);
+                Debug.Log($"Received {_receivedText.Length} char from client2 ({data.RemoteEndPoint})\n({_stopwatch2.ElapsedMilliseconds}ms)");
             });
             _disposables.Add(d1);
 
@@ -55,8 +55,8 @@ namespace Rudp2p
             var d2 = _client2.RegisterCallback(0, data =>
             {
                 _stopwatch.Stop();
-                _receivedText2 = System.Text.Encoding.UTF8.GetString(data.Span);
-                Debug.Log($"Received {_receivedText2.Length} char from client1 ({_stopwatch.ElapsedMilliseconds}ms)");
+                _receivedText2 = System.Text.Encoding.UTF8.GetString(data.Data.Span);
+                Debug.Log($"Received {_receivedText2.Length} char from client1 ({data.RemoteEndPoint})\n({_stopwatch.ElapsedMilliseconds}ms)");
             });
             _disposables.Add(d2);
         }
@@ -79,14 +79,15 @@ namespace Rudp2p
 
         private void OnGUI()
         {
+            // Left side
             GUILayout.BeginArea(new Rect(10, 10, 350, Screen.height - 20), GUI.skin.box);
             GUILayout.Label("CLIENT1");
             GUILayout.Label("Send text");
             _sendText = GUILayout.TextArea(_sendText, GUILayout.MaxHeight(400f), GUILayout.ExpandHeight(false));
             if (GUILayout.Button($"Send : {_sendText.Length} chars"))
             {
-                var data = System.Text.Encoding.UTF8.GetBytes(_sendText);
-                _client.Send(new IPEndPoint(IPAddress.Parse(_targetIp), _port2), 0, data);
+                byte[] data = System.Text.Encoding.UTF8.GetBytes(_sendText);
+                _client.SendAndForgetAsync(new IPEndPoint(IPAddress.Parse(_targetIp), _port2), 0, data);
                 _stopwatch.Restart();
                 Debug.Log($"Sent {data.Length} bytes from client1");
             }
@@ -94,14 +95,15 @@ namespace Rudp2p
             GUILayout.TextArea(_receivedText, GUILayout.MaxHeight(400f), GUILayout.ExpandHeight(false));
             GUILayout.EndArea();
 
+            // Right side
             GUILayout.BeginArea(new Rect(400, 10, 350, Screen.height - 20), GUI.skin.box);
             GUILayout.Label("CLIENT2");
             GUILayout.Label("Send text");
             _sendText2 = GUILayout.TextArea(_sendText2, GUILayout.MaxHeight(400f), GUILayout.ExpandHeight(false));
             if (GUILayout.Button($"Send : {_sendText2.Length} chars"))
             {
-                var data = System.Text.Encoding.UTF8.GetBytes(_sendText2);
-                _client2.Send(new IPEndPoint(IPAddress.Parse(_targetIp), _port), 0, data);
+                byte[] data = System.Text.Encoding.UTF8.GetBytes(_sendText2);
+                _client2.SendAndForgetAsync(new IPEndPoint(IPAddress.Parse(_targetIp), _port), 0, data);
                 _stopwatch2.Restart();
                 Debug.Log($"Sent {data.Length} bytes from client2");
             }

@@ -15,12 +15,13 @@ namespace Rudp2p
     /// </summary>
     public class Rudp2pClient : IDisposable
     {
-        private Socket _socket;
+        public Rudp2pConfig Config { get; } = new();
+        public Socket Socket { get; private set; }
+
         private IPEndPoint _remoteEndPoint;
-        private int _port;
         private CancellationTokenSource _cts;
         private ConcurrentDictionary<int, PacketMerger> _packetMergers;
-        private readonly Dictionary<int, List<Action<ReadOnlyMemory<byte>>>> _callbacks = new();
+        private readonly Dictionary<int, List<Action<Rudp2pReceiveData>>> _callbacks = new();
         private ReliableSender _reliableSender;
         private SynchronizationContext _originalContext;
 
@@ -29,35 +30,32 @@ namespace Rudp2p
         private CancellationTokenSource _cleanupCts;
         private readonly ConcurrentDictionary<int, DateTime> _processedPacketIds = new();
 
-        private Rudp2pConfig _config = new();
-
         public Rudp2pClient() { }
 
         public Rudp2pClient(Rudp2pConfig config)
         {
-            _config = config;
+            Config = config;
         }
 
         public void Start(int port)
         {
-            if (_socket != null)
+            if (Socket != null)
             {
                 Close();
             }
 
             try
             {
-                _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                _socket.Bind(new IPEndPoint(IPAddress.Any, port));
+                Socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                Socket.Bind(new IPEndPoint(IPAddress.Any, port));
             }
             catch (Exception)
             {
-                _socket?.Dispose();
-                _socket = null;
+                Socket?.Dispose();
+                Socket = null;
                 throw;
             }
 
-            _port = port;
             _packetMergers = new ConcurrentDictionary<int, PacketMerger>();
             _reliableSender = new ReliableSender();
             _originalContext = SynchronizationContext.Current;
@@ -78,8 +76,8 @@ namespace Rudp2p
             _cts?.Cancel();
             _cts?.Dispose();
             _cts = null;
-            _socket?.Dispose();
-            _socket = null;
+            Socket?.Dispose();
+            Socket = null;
             _cleanupCts?.Cancel();
             _cleanupCts?.Dispose();
             _cleanupCts = null;
@@ -96,18 +94,24 @@ namespace Rudp2p
             Close();
         }
 
-        public IDisposable RegisterCallback(int key, Action<ReadOnlyMemory<byte>> callback)
+        /// <summary>
+        /// Register a callback to receive data with the specified key
+        /// </summary>
+        public IDisposable RegisterCallback(int key, Action<Rudp2pReceiveData> callback)
         {
             if (!_callbacks.ContainsKey(key))
             {
-                _callbacks[key] = new List<Action<ReadOnlyMemory<byte>>>();
+                _callbacks[key] = new List<Action<Rudp2pReceiveData>>();
             }
 
             _callbacks[key].Add(callback);
             return new CallbackDisposer(this, callback);
         }
 
-        public void UnregisterCallback(Action<ReadOnlyMemory<byte>> callback)
+        /// <summary>
+        /// Unregister a callback
+        /// </summary>
+        public void UnregisterCallback(Action<Rudp2pReceiveData> callback)
         {
             foreach (int key in _callbacks.Keys)
             {
@@ -115,9 +119,21 @@ namespace Rudp2p
             }
         }
 
+        /// <summary>
+        /// Send data to the target endpoint asynchronously
+        /// </summary>
+        /// <param name="target">Target endpoint</param>
+        /// <param name="key">Key to identify the data (User defined)</param>
+        /// <param name="data">Data to send</param>
+        /// <param name="isReliable">Whether to use reliable transmission</param>
+        public Task SendAsync(IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
+        {
+            return _reliableSender.SendAsync(Socket, target, key, data, Config, isReliable);
+        }
+
         private async Task ReceiveLoop(CancellationToken token)
         {
-            byte[] receiveBuffer = new byte[_config.Mtu + 100];
+            byte[] receiveBuffer = new byte[Config.Mtu + 100];
             ArraySegment<byte> receiveSegment = new(receiveBuffer);
             EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
 
@@ -125,7 +141,7 @@ namespace Rudp2p
             {
                 try
                 {
-                    var result = await _socket.ReceiveFromAsync(receiveSegment, SocketFlags.None, remoteEndPoint);
+                    var result = await Socket.ReceiveFromAsync(receiveSegment, SocketFlags.None, remoteEndPoint);
                     if (result.ReceivedBytes < PacketHeader.Size) continue;
 
                     OnReceiveData(receiveSegment.AsMemory(0, result.ReceivedBytes), result.RemoteEndPoint as IPEndPoint);
@@ -172,11 +188,17 @@ namespace Rudp2p
                 {
                     packetMerger.SetMergedData(owner.Memory.Span);
 
-                    if (_callbacks.TryGetValue(header.Key, out List<Action<ReadOnlyMemory<byte>>> callbacks))
+                    if (_callbacks.TryGetValue(header.Key, out List<Action<Rudp2pReceiveData>> callbacks))
                     {
+                        var receiveData = new Rudp2pReceiveData
+                        {
+                            RemoteEndPoint = sender,
+                            Data = owner.Memory[..packetMerger.ReceivedSize]
+                        };
+
                         foreach (var callback in callbacks)
                         {
-                            callback(owner.Memory[..packetMerger.ReceivedSize]);
+                            callback(receiveData);
                         }
                     }
 
@@ -186,18 +208,13 @@ namespace Rudp2p
             }
         }
 
-        public void Send(IPEndPoint target, int key, byte[] data, bool isReliable = true)
-        {
-            Task.Run(() => _reliableSender.SendAsync(_socket, target, key, data, _config, isReliable));
-        }
-
         private void SendAck(IPEndPoint sender, int packetId, int seq)
         {
             byte[] ackPacket = ArrayPool<byte>.Shared.Rent(PacketHeader.Size);
             try
             {
                 PacketHelper.SetHeader(ackPacket, new PacketHeader(packetId, (ushort)seq, 0, 0));
-                _socket.SendTo(ackPacket, ackPacket.Length, SocketFlags.None, sender);
+                Socket.SendTo(ackPacket, ackPacket.Length, SocketFlags.None, sender);
             }
             finally
             {
@@ -244,9 +261,9 @@ namespace Rudp2p
         public class CallbackDisposer : IDisposable
         {
             private readonly Rudp2pClient _parent;
-            private readonly Action<ReadOnlyMemory<byte>> _callback;
+            private readonly Action<Rudp2pReceiveData> _callback;
 
-            public CallbackDisposer(Rudp2pClient parent, Action<ReadOnlyMemory<byte>> callback)
+            public CallbackDisposer(Rudp2pClient parent, Action<Rudp2pReceiveData> callback)
             {
                 _parent = parent;
                 _callback = callback;
@@ -256,6 +273,12 @@ namespace Rudp2p
             {
                 _parent.UnregisterCallback(_callback);
             }
+        }
+
+        public struct Rudp2pReceiveData
+        {
+            public IPEndPoint RemoteEndPoint;
+            public ReadOnlyMemory<byte> Data;
         }
     }
 }
