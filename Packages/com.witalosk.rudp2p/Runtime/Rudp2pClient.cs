@@ -188,23 +188,25 @@ namespace Rudp2p
                 {
                     packetMerger.SetMergedData(owner.Memory.Span);
 
-                    if (_callbacks.TryGetValue(header.Key, out List<Action<Rudp2pReceiveData>> callbacks))
+                    try
                     {
-                        var receiveData = new Rudp2pReceiveData
+                        if (_callbacks.TryGetValue(header.Key, out List<Action<Rudp2pReceiveData>> callbacks))
                         {
-                            RemoteEndPoint = sender,
-                            Data = owner.Memory[..packetMerger.ReceivedSize]
-                        };
+                            var receiveData = new Rudp2pReceiveData { RemoteEndPoint = sender, Data = owner.Memory[..packetMerger.ReceivedSize] };
 
-                        foreach (var callback in callbacks)
-                        {
-                            callback(receiveData);
+                            foreach (var callback in callbacks)
+                            {
+                                callback(receiveData);
+                            }
                         }
+
+                        _packetMergers.TryRemove(header.PacketId, out _);
                     }
-
-                    _packetMergers.TryRemove(header.PacketId, out _);
+                    finally
+                    {
+                        packetMerger.Dispose();
+                    }
                 }
-
             }
         }
 
