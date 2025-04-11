@@ -1,5 +1,8 @@
 ﻿# Changelog
 
+## [1.1.1] - 2025-04-11
+- Packet merging bug fix.
+
 ## [1.1.0] - 2025-04-02
 - Optimize the performance of the library.
 - Change some API to be more user-friendly and the performance is better.

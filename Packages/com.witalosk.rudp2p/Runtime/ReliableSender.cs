@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
-using UnityEngine;
 using Random = System.Random;
 
 namespace Rudp2p
@@ -47,14 +46,14 @@ namespace Rudp2p
                         tasks.Add
                         (
                             isReliable
-                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId], config)
                                 : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
                         );
                     }
                     else
                     {
                         await (isReliable
-                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId], config)
                             : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]));
                     }
                 }
@@ -83,14 +82,14 @@ namespace Rudp2p
             _sendQueue?.Dispose();
         }
 
-        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, bool[] ackReceived)
+        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, bool[] ackReceived, Rudp2pConfig config)
         {
-            for (int tryNum = 0; tryNum < 5; tryNum++)
+            for (int tryNum = 0; tryNum < config.ReliableRetryCount; tryNum++)
             {
                 await _sendQueue.Enqueue(client, target, packet);
 
                 int elapsedMs = 0;
-                while (!ackReceived[seq] && elapsedMs < 50)
+                while (!ackReceived[seq] && elapsedMs < config.ReliableRetryInterval)
                 {
                     await Task.Delay(1);
                     elapsedMs += 1;
@@ -98,9 +97,9 @@ namespace Rudp2p
 
                 if (ackReceived[seq]) break;
 
-                if (tryNum == 4)
+                if (tryNum == config.ReliableRetryCount - 1)
                 {
-                    Console.WriteLine($"[WARN] Packet {seq} lost after 5 attempts");
+                    Console.WriteLine($"[WARN] Packet {seq} lost after {config.ReliableRetryCount} attempts");
                 }
             }
         }
