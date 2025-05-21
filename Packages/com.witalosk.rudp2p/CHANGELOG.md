@@ -1,5 +1,9 @@
 ﻿# Changelog
 
+## [1.1.2] - 2025-05-21
+- Packet merging bug fix.
+- Added the configs to customize the sending bucket size and its refill rate.
+
 ## [1.1.1] - 2025-04-11
 - Packet merging bug fix.
 
