@@ -10,8 +10,21 @@ namespace Rudp2p
 {
     internal class ReliableSender : IDisposable
     {
-        private readonly SendQueue _sendQueue = new(1250000, 625000);
+        private readonly SendQueue _sendQueue;
         private readonly Dictionary<int, bool[]> _ackReceived = new();
+
+        private const int DefaultBucketSize = 3000000;
+        private const int DefaultRefillRate = 1875000;
+
+        internal ReliableSender()
+        {
+            _sendQueue = new SendQueue(DefaultBucketSize, DefaultRefillRate);
+        }
+
+        internal ReliableSender(SendQueue sendQueue)
+        {
+            _sendQueue = sendQueue;
+        }
 
         public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, Rudp2pConfig config, bool isReliable = true)
         {
@@ -103,7 +116,5 @@ namespace Rudp2p
                 }
             }
         }
-
-
     }
 }

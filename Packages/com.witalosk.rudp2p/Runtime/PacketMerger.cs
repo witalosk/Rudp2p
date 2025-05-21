@@ -31,7 +31,7 @@ namespace Rudp2p
         {
             lock (_lockObject)
             {
-                if (_isDisposed || seqNum < 0 || seqNum >= _totalSegNum)
+                if (_isDisposed || seqNum < 0 || seqNum >= _totalSegNum || _receivedPackets[seqNum].Length > 0)
                 {
                     return false;
                 }

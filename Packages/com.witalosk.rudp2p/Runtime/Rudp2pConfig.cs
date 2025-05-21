@@ -28,5 +28,15 @@ namespace Rudp2p
         /// Reliable transmission retry interval in milliseconds (Default: 50)
         /// </summary>
         public int ReliableRetryInterval = 50;
+
+        /// <summary>
+        /// Token bucket size in bytes (Default: 3MB)
+        /// </summary>
+        public int SendBucketByteSize = 3000000;
+
+        /// <summary>
+        /// Token bucket refill rate in bytes per second (Default: 1.875MB/s)
+        /// </summary>
+        public int SendBucketRefillRate = 1875000;
     }
 }
