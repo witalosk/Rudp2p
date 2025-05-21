@@ -13,9 +13,12 @@ namespace Rudp2p
         private readonly SendQueue _sendQueue;
         private readonly Dictionary<int, bool[]> _ackReceived = new();
 
+        private const int DefaultBucketSize = 3000000;
+        private const int DefaultRefillRate = 1875000;
+
         internal ReliableSender()
         {
-            _sendQueue = new SendQueue(3000000, 1875000);
+            _sendQueue = new SendQueue(DefaultBucketSize, DefaultRefillRate);
         }
 
         internal ReliableSender(SendQueue sendQueue)
