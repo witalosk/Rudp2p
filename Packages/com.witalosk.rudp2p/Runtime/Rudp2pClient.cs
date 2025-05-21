@@ -57,7 +57,7 @@ namespace Rudp2p
             }
 
             _packetMergers = new ConcurrentDictionary<int, PacketMerger>();
-            _reliableSender = new ReliableSender();
+            _reliableSender = new ReliableSender(new SendQueue(Config.SendBucketByteSize, Config.SendBucketRefillRate));
             _originalContext = SynchronizationContext.Current;
             _processedPacketIds.Clear();
 
