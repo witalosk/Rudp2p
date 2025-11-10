@@ -12,29 +12,32 @@ namespace Rudp2p
     {
         private readonly SendQueue _sendQueue;
         private readonly Dictionary<int, bool[]> _ackReceived = new();
+        private readonly Rudp2pConfig _config;
 
-        private const int DefaultBucketSize = 3000000;
-        private const int DefaultRefillRate = 1875000;
+        private const int _defaultBucketSize = 3000000;
+        private const int _defaultRefillRate = 1875000;
 
-        internal ReliableSender()
+        internal ReliableSender(Rudp2pConfig config)
         {
-            _sendQueue = new SendQueue(DefaultBucketSize, DefaultRefillRate);
+            _config = config;
+            _sendQueue = new SendQueue(_defaultBucketSize, _defaultRefillRate);
         }
 
-        internal ReliableSender(SendQueue sendQueue)
+        internal ReliableSender(Rudp2pConfig config, SendQueue sendQueue)
         {
+            _config = config;
             _sendQueue = sendQueue;
         }
 
-        public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, Rudp2pConfig config, bool isReliable = true)
+        public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
         {
-            if (data.Length > config.Mtu * ushort.MaxValue - PacketHeader.Size)
+            if (data.Length > _config.Mtu * ushort.MaxValue - PacketHeader.Size)
             {
-                throw new Exception($"Data is too large to send (Max size: {config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
+                throw new Exception($"Data is too large to send (Max size: {_config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
             }
 
             int packetId = new Random().Next();
-            int singlePayloadSize = config.Mtu - PacketHeader.Size;
+            int singlePayloadSize = _config.Mtu - PacketHeader.Size;
             int totalPackets = (data.Length + singlePayloadSize - 1) / singlePayloadSize;
             _ackReceived[packetId] = ArrayPool<bool>.Shared.Rent(totalPackets);
             List<byte[]> sendBuffers = new();
@@ -44,9 +47,9 @@ namespace Rudp2p
                 List<Task> tasks = new();
                 for (int i = 0; i < totalPackets; i++)
                 {
-                    byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(config.Mtu);
+                    byte[] sendBuffer = ArrayPool<byte>.Shared.Rent(_config.Mtu);
                     sendBuffers.Add(sendBuffer);
-                    var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, config.Mtu);
+                    var sendBufferSegment = new ArraySegment<byte>(sendBuffer, 0, _config.Mtu);
 
                     int srcOffset = i * singlePayloadSize;
                     int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
@@ -54,24 +57,24 @@ namespace Rudp2p
                     PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(packetId, (ushort)i, (ushort)totalPackets, key));
                     data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
 
-                    if (config.ParallelSending)
+                    if (_config.ParallelSending)
                     {
                         tasks.Add
                         (
                             isReliable
-                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId], config)
-                                : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
+                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                                : SendOrEnqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
                         );
                     }
                     else
                     {
                         await (isReliable
-                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId], config)
-                            : _sendQueue.Enqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]));
+                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                            : SendOrEnqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]));
                     }
                 }
 
-                if (config.ParallelSending) { await Task.WhenAll(tasks); }
+                if (_config.ParallelSending) { await Task.WhenAll(tasks); }
             }
             finally
             {
@@ -95,14 +98,14 @@ namespace Rudp2p
             _sendQueue?.Dispose();
         }
 
-        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, bool[] ackReceived, Rudp2pConfig config)
+        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, bool[] ackReceived)
         {
-            for (int tryNum = 0; tryNum < config.ReliableRetryCount; tryNum++)
+            for (int tryNum = 0; tryNum < _config.ReliableRetryCount; tryNum++)
             {
-                await _sendQueue.Enqueue(client, target, packet);
+                await SendOrEnqueue(client, target, packet);
 
                 int elapsedMs = 0;
-                while (!ackReceived[seq] && elapsedMs < config.ReliableRetryInterval)
+                while (!ackReceived[seq] && elapsedMs < _config.ReliableRetryInterval)
                 {
                     await Task.Delay(1);
                     elapsedMs += 1;
@@ -110,11 +113,18 @@ namespace Rudp2p
 
                 if (ackReceived[seq]) break;
 
-                if (tryNum == config.ReliableRetryCount - 1)
+                if (tryNum == _config.ReliableRetryCount - 1)
                 {
-                    Console.WriteLine($"[WARN] Packet {seq} lost after {config.ReliableRetryCount} attempts");
+                    Console.WriteLine($"[WARN] Packet {seq} lost after {_config.ReliableRetryCount} attempts");
                 }
             }
+        }
+
+        private Task SendOrEnqueue(Socket client, IPEndPoint target, ArraySegment<byte> data)
+        {
+            return _config.EnableSendRateLimitByBucket
+                ? _sendQueue.Enqueue(client, target, data)
+                : client.SendToAsync(data, SocketFlags.None, target);
         }
     }
 }

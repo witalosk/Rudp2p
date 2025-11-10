@@ -57,7 +57,7 @@ namespace Rudp2p
             }
 
             _packetMergers = new ConcurrentDictionary<int, PacketMerger>();
-            _reliableSender = new ReliableSender(new SendQueue(Config.SendBucketByteSize, Config.SendBucketRefillRate));
+            _reliableSender = new ReliableSender(Config, new SendQueue(Config.SendBucketByteSize, Config.SendBucketRefillRate));
             _originalContext = SynchronizationContext.Current;
             _processedPacketIds.Clear();
 
@@ -128,7 +128,7 @@ namespace Rudp2p
         /// <param name="isReliable">Whether to use reliable transmission</param>
         public Task SendAsync(IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
         {
-            return _reliableSender.SendAsync(Socket, target, key, data, Config, isReliable);
+            return _reliableSender.SendAsync(Socket, target, key, data, isReliable);
         }
 
         private async Task ReceiveLoop(CancellationToken token)
