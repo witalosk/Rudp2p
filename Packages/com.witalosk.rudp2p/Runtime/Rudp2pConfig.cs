@@ -21,13 +21,18 @@ namespace Rudp2p
 
         /// <summary>
         /// Reliable transmission retry count (Default: 5)
-        /// </summary>
+        /// </summary>W
         public int ReliableRetryCount = 5;
 
         /// <summary>
         /// Reliable transmission retry interval in milliseconds (Default: 50)
         /// </summary>
         public int ReliableRetryInterval = 50;
+
+        /// <summary>
+        /// Enable send rate limit by token bucket algorithm
+        /// </summary>
+        public bool EnableSendRateLimitByBucket = false;
 
         /// <summary>
         /// Token bucket size in bytes (Default: 3MB)
