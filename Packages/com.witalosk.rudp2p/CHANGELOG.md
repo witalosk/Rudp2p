@@ -1,5 +1,8 @@
 ﻿# Changelog
 
+## [1.1.4] - 2025-12-16
+- Changed the socket error handling logic in Receive loop.
+
 ## [1.1.3] - 2025-11-10
 - Added the configs to toggle the bucket algorithm for sending.
 

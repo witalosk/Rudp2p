@@ -139,23 +139,58 @@ namespace Rudp2p
 
             while (!token.IsCancellationRequested)
             {
+                SocketReceiveFromResult result = default;
                 try
                 {
-                    var result = await Socket.ReceiveFromAsync(receiveSegment, SocketFlags.None, remoteEndPoint);
-                    if (result.ReceivedBytes < PacketHeader.Size) continue;
-
-                    OnReceiveData(receiveSegment.AsMemory(0, result.ReceivedBytes), result.RemoteEndPoint as IPEndPoint);
+                    result = await Socket.ReceiveFromAsync(receiveSegment, SocketFlags.None, remoteEndPoint);
                 }
                 catch (ObjectDisposedException)
                 {
                     break;
                 }
+                catch (SocketException se)
+                {
+                    switch (se.SocketErrorCode)
+                    {
+                        // Ignored errors
+                        case SocketError.ConnectionReset: // ICMP Port Unreachable
+                        case SocketError.MessageSize: // Over MTU
+                        case SocketError.TimedOut: // Timeout
+                        case SocketError.NetworkReset: // Network dropped connection on reset
+                        case SocketError.NetworkUnreachable: // Network unreachable
+                            continue;
+
+                        // Expected errors (just exit the loop)
+                        case SocketError.Interrupted: // Interrupted by Close()
+                        case SocketError.OperationAborted: // Cancellation requested
+                        case SocketError.Shutdown: // Shutdown
+                        case SocketError.NotSocket: // Invalid Socket
+                            break;
+
+                        // Unexpected errors
+                        default:
+                            OutputLog($"Socket Error Code: {se.SocketErrorCode}, Message: {se.Message}");
+                            await Task.Delay(1, token);
+                            continue;
+                    }
+                }
                 catch (Exception e)
                 {
                     OutputLog(e.ToString());
-                    await Task.Delay(500, token);
+                    await Task.Delay(1, token);
+                    continue;
                 }
 
+                if (result.ReceivedBytes < PacketHeader.Size) continue;
+
+                try
+                {
+                    OnReceiveData(receiveSegment.AsMemory(0, result.ReceivedBytes), result.RemoteEndPoint as IPEndPoint);
+                }
+                catch (Exception e)
+                {
+                    OutputLog(e.ToString());
+                }
             }
         }
 
@@ -217,6 +252,21 @@ namespace Rudp2p
             {
                 PacketHelper.SetHeader(ackPacket, new PacketHeader(packetId, (ushort)seq, 0, 0));
                 Socket.SendTo(ackPacket, ackPacket.Length, SocketFlags.None, sender);
+            }
+            catch (SocketException se)
+            {
+                switch (se.SocketErrorCode)
+                {
+                    // Ignored errors
+                    case SocketError.ConnectionReset: // ICMP Port Unreachable
+                    case SocketError.NetworkUnreachable: // Network unreachable
+                        break;
+
+                    // Unexpected errors
+                    default:
+                        OutputLog($"Socket Error Code: {se.SocketErrorCode}, Message: {se.Message}");
+                        break;
+                }
             }
             finally
             {
