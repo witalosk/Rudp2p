@@ -270,11 +270,22 @@ namespace Rudp2p
 
         private void SendAck(IPEndPoint sender, int packetId, int seq)
         {
+            Socket socket = Socket;
+            if (socket == null) return;
+
             byte[] ackPacket = ArrayPool<byte>.Shared.Rent(PacketHeader.Size);
+            PacketHelper.SetHeader(ackPacket, new PacketHeader(packetId, (ushort)seq, 0, 0));
+            _ = SendAckAsync(socket, ackPacket, sender);
+        }
+
+        private async Task SendAckAsync(Socket socket, byte[] ackPacket, IPEndPoint sender)
+        {
             try
             {
-                PacketHelper.SetHeader(ackPacket, new PacketHeader(packetId, (ushort)seq, 0, 0));
-                Socket.SendTo(ackPacket, ackPacket.Length, SocketFlags.None, sender);
+                await socket.SendToAsync(new ArraySegment<byte>(ackPacket, 0, PacketHeader.Size), SocketFlags.None, sender);
+            }
+            catch (ObjectDisposedException)
+            {
             }
             catch (SocketException se)
             {

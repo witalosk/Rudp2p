@@ -19,15 +19,9 @@ namespace Rudp2p
         /// <param name="isReliable">Whether to use reliable transmission (passed to the underlying SendAsync).</param>
         public static void SendAndForgetAsync(this Rudp2pClient client, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
         {
-            Task.Run(() => client.SendAsync(target, key, data, isReliable))
-                .ContinueWith(t =>
-                {
-                    // Log t.Exception if t.IsFaulted
-                    if (t.IsFaulted)
-                    {
-                        Debug.Log($"Failed to send data: {t.Exception}");
-                    }
-                }, TaskContinuationOptions.OnlyOnFaulted);
+            client.SendAsync(target, key, data, isReliable)
+                .ContinueWith(t => Debug.Log($"Failed to send data: {t.Exception}"),
+                    TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }
