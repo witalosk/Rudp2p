@@ -16,7 +16,7 @@ namespace Rudp2p
         private static int _packetIdCounter = new Random().Next();
 
         private readonly SendQueue _sendQueue;
-        private readonly ConcurrentDictionary<int, TaskCompletionSource<bool>[]> _ackWaiters = new();
+        private readonly ConcurrentDictionary<(IPEndPoint Target, int PacketId), TaskCompletionSource<bool>[]> _ackWaiters = new();
         private readonly Rudp2pConfig _config;
         private readonly SemaphoreSlim _sendWindow;
 
@@ -58,7 +58,7 @@ namespace Rudp2p
                 {
                     ackWaiters[i] = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 }
-                _ackWaiters[packetId] = ackWaiters;
+                _ackWaiters[(target, packetId)] = ackWaiters;
             }
 
             List<byte[]> sendBuffers = new(totalPackets);
@@ -102,14 +102,14 @@ namespace Rudp2p
                 }
                 if (isReliable)
                 {
-                    _ackWaiters.TryRemove(packetId, out _);
+                    _ackWaiters.TryRemove((target, packetId), out _);
                 }
             }
         }
 
-        public void ReportAck(int packetId, int seq)
+        public void ReportAck(IPEndPoint sender, int packetId, int seq)
         {
-            if (!_ackWaiters.TryGetValue(packetId, out TaskCompletionSource<bool>[] waiters)) return;
+            if (!_ackWaiters.TryGetValue((sender, packetId), out TaskCompletionSource<bool>[] waiters)) return;
             if ((uint)seq >= (uint)waiters.Length) return;
             waiters[seq].TrySetResult(true);
         }

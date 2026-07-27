@@ -222,7 +222,7 @@ namespace Rudp2p
 
             if (header.Type == PacketType.Ack)
             {
-                _reliableSender.ReportAck(header.PacketId, header.SeqId);
+                _reliableSender.ReportAck(sender, header.PacketId, header.SeqId);
                 return;
             }
 
