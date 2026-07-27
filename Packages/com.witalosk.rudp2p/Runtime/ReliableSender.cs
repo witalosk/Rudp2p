@@ -39,11 +39,11 @@ namespace Rudp2p
             _sendWindow = new SemaphoreSlim(Math.Max(1, config.SendWindowSize));
         }
 
-        public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
+        public async Task SendAsync(Socket socket, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true, CancellationToken cancellationToken = default)
         {
             if (data.Length > _config.Mtu * ushort.MaxValue - PacketHeader.Size)
             {
-                throw new Exception($"Data is too large to send (Max size: {_config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
+                throw new ArgumentOutOfRangeException(nameof(data), $"Data is too large to send (Max size: {_config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
             }
 
             int packetId = Interlocked.Increment(ref _packetIdCounter);
@@ -75,20 +75,20 @@ namespace Rudp2p
                     int srcOffset = i * singlePayloadSize;
                     int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
 
-                    PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(PacketType.Data, packetId, (ushort)i, (ushort)totalPackets, key));
+                    PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(isReliable ? PacketType.Data : PacketType.UnreliableData, packetId, (ushort)i, (ushort)totalPackets, key));
                     data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
 
                     var packet = sendBufferSegment[..(payloadSize + PacketHeader.Size)];
 
                     if (_config.ParallelSending)
                     {
-                        tasks!.Add(SendFragmentWithWindow(socket, target, packet, i, ackWaiters, isReliable));
+                        tasks!.Add(SendFragmentWithWindow(socket, target, packet, i, ackWaiters, isReliable, cancellationToken));
                     }
                     else
                     {
                         await (isReliable
-                            ? SendWithRetry(socket, target, packet, i, ackWaiters)
-                            : SendOrEnqueue(socket, target, packet));
+                            ? SendWithRetry(socket, target, packet, i, ackWaiters, cancellationToken)
+                            : SendOrEnqueue(socket, target, packet, cancellationToken));
                     }
                 }
 
@@ -119,20 +119,20 @@ namespace Rudp2p
             _sendQueue?.Dispose();
         }
 
-        private async Task SendFragmentWithWindow(Socket socket, IPEndPoint target, ArraySegment<byte> packet, int seq, TaskCompletionSource<bool>[] ackWaiters, bool isReliable)
+        private async Task SendFragmentWithWindow(Socket socket, IPEndPoint target, ArraySegment<byte> packet, int seq, TaskCompletionSource<bool>[] ackWaiters, bool isReliable, CancellationToken cancellationToken)
         {
             // Caps the number of in-flight fragments so large payloads do not flood
             // the network and trigger self-inflicted packet loss
-            await _sendWindow.WaitAsync();
+            await _sendWindow.WaitAsync(cancellationToken);
             try
             {
                 if (isReliable)
                 {
-                    await SendWithRetry(socket, target, packet, seq, ackWaiters);
+                    await SendWithRetry(socket, target, packet, seq, ackWaiters, cancellationToken);
                 }
                 else
                 {
-                    await SendOrEnqueue(socket, target, packet);
+                    await SendOrEnqueue(socket, target, packet, cancellationToken);
                 }
             }
             finally
@@ -141,17 +141,19 @@ namespace Rudp2p
             }
         }
 
-        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, TaskCompletionSource<bool>[] ackWaiters)
+        private async Task SendWithRetry(Socket client, IPEndPoint target, ArraySegment<byte> packet, int seq, TaskCompletionSource<bool>[] ackWaiters, CancellationToken cancellationToken)
         {
             Task<bool> ackTask = ackWaiters[seq].Task;
             int rto = GetCurrentRtoMs();
 
             for (int tryNum = 0; tryNum < _config.ReliableRetryCount; tryNum++)
             {
-                long sentAt = Stopwatch.GetTimestamp();
-                await SendOrEnqueue(client, target, packet);
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (await Task.WhenAny(ackTask, Task.Delay(rto)) == ackTask)
+                long sentAt = Stopwatch.GetTimestamp();
+                await SendOrEnqueue(client, target, packet, cancellationToken);
+
+                if (await Task.WhenAny(ackTask, Task.Delay(rto, cancellationToken)) == ackTask)
                 {
                     // Karn's algorithm: only sample RTT for fragments that were not retransmitted
                     if (tryNum == 0)
@@ -194,8 +196,9 @@ namespace Rudp2p
         }
 
 
-        private Task SendOrEnqueue(Socket client, IPEndPoint target, ArraySegment<byte> data)
+        private Task SendOrEnqueue(Socket client, IPEndPoint target, ArraySegment<byte> data, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return _config.EnableSendRateLimitByBucket
                 ? _sendQueue.Enqueue(client, target, data)
                 : client.SendToAsync(data, SocketFlags.None, target);

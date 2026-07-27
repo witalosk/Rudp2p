@@ -6,8 +6,11 @@ namespace Rudp2p
 {
     internal enum PacketType : byte
     {
+        /// <summary>Reliable data fragment; the receiver must reply with an Ack</summary>
         Data = 1,
         Ack = 2,
+        /// <summary>Unreliable data fragment; no Ack is expected, saving return bandwidth</summary>
+        UnreliableData = 3,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -61,7 +64,7 @@ namespace Rudp2p
             if (BinaryPrimitives.ReadUInt16LittleEndian(data) != PacketHeader.MagicNumber) return false;
 
             byte type = data[2];
-            if (type != (byte)PacketType.Data && type != (byte)PacketType.Ack) return false;
+            if (type != (byte)PacketType.Data && type != (byte)PacketType.Ack && type != (byte)PacketType.UnreliableData) return false;
 
             header = new PacketHeader
             (

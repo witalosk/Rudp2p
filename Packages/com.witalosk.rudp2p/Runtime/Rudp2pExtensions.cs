@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -17,9 +18,10 @@ namespace Rudp2p
         /// <param name="key">A user-defined key to identify the data.</param>
         /// <param name="data">The data to send.</param>
         /// <param name="isReliable">Whether to use reliable transmission (passed to the underlying SendAsync).</param>
-        public static void SendAndForgetAsync(this Rudp2pClient client, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true)
+        /// <param name="cancellationToken">Cancels the send, including pending retries.</param>
+        public static void SendAndForgetAsync(this Rudp2pClient client, IPEndPoint target, int key, ReadOnlyMemory<byte> data, bool isReliable = true, CancellationToken cancellationToken = default)
         {
-            client.SendAsync(target, key, data, isReliable)
+            client.SendAsync(target, key, data, isReliable, cancellationToken)
                 .ContinueWith(t => Debug.Log($"Failed to send data: {t.Exception}"),
                     TaskContinuationOptions.OnlyOnFaulted);
         }
