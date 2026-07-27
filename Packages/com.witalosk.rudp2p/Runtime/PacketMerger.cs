@@ -12,6 +12,7 @@ namespace Rudp2p
         }
 
         public int ReceivedSize { get; private set; } = 0;
+        public DateTime LastReceivedUtc { get; private set; } = DateTime.UtcNow;
 
         private readonly ReceivedPacketData[] _receivedPackets;
         private readonly ushort _totalSegNum = 0;
@@ -31,10 +32,12 @@ namespace Rudp2p
         {
             lock (_lockObject)
             {
-                if (_isDisposed || seqNum < 0 || seqNum >= _totalSegNum || _receivedPackets[seqNum].Length > 0)
+                if (_isDisposed || seqNum < 0 || seqNum >= _totalSegNum || _receivedPackets[seqNum].Data != null)
                 {
                     return false;
                 }
+
+                LastReceivedUtc = DateTime.UtcNow;
 
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(payload.Length);
                 try

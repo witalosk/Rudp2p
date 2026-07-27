@@ -47,7 +47,10 @@ public class SampleClass : MonoBehaviour
 
     private void OnDataReceive(Rudp2pReceiveData data)
     {
-        // if necessary, it should switch to the main thread. (by SynchronizationContext)
+        // NOTE: This callback runs on the receive-loop thread.
+        // If necessary, switch to the main thread (e.g. via SynchronizationContext).
+        // NOTE: data.Data is backed by pooled memory that is reused after this callback returns.
+        // Copy it (e.g. data.Data.ToArray()) if you need to keep it beyond the callback.
         Debug.Log(Encoding.GetEncoding("UTF-8").GetString(data.Data));
     }
 
@@ -57,3 +60,20 @@ public class SampleClass : MonoBehaviour
     }
 
 }
+```
+
+## Error handling
+- If a reliable send (`isReliable: true`) is not acknowledged within the retry limits, `SendAsync` throws `Rudp2pSendException`.
+- `SendAsync` accepts an optional `CancellationToken`. `Close()` also cancels all in-flight sends.
+
+## Limitations
+- **No keep-alive / disconnection detection**: The protocol is connectionless and does not exchange
+  keep-alive packets. If you communicate across NAT, the NAT mapping may expire during idle periods
+  (often under 30 seconds) — send periodic application-level packets to keep it open, and implement
+  your own timeout logic to detect unreachable peers.
+- **Fixed MTU (no Path MTU Discovery)**: The packet size is bounded by `Rudp2pConfig.Mtu`
+  (default: 1400 bytes), which is safe for most networks. On VPNs or tunneled networks with a smaller
+  path MTU, oversized datagrams are silently dropped — lower `Mtu` in that case.
+- **Unordered**: Message ordering is not guaranteed, even for reliable sends.
+- **No congestion control**: Only a static in-flight window (`Rudp2pConfig.SendWindowSize`) and an
+  optional token-bucket rate limit (`EnableSendRateLimitByBucket`) bound the send rate.

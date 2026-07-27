@@ -21,13 +21,18 @@ namespace Rudp2p
 
         /// <summary>
         /// Reliable transmission retry count (Default: 5)
-        /// </summary>W
+        /// </summary>
         public int ReliableRetryCount = 5;
 
         /// <summary>
-        /// Reliable transmission retry interval in milliseconds (Default: 50)
+        /// Initial retransmission timeout in milliseconds, used until RTT samples are collected (Default: 50)
         /// </summary>
         public int ReliableRetryInterval = 50;
+
+        /// <summary>
+        /// Maximum number of fragments in flight at once when ParallelSending is enabled (Default: 64)
+        /// </summary>
+        public int SendWindowSize = 64;
 
         /// <summary>
         /// Enable send rate limit by token bucket algorithm
