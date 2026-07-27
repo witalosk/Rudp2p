@@ -217,14 +217,17 @@ namespace Rudp2p
 
         private void OnReceiveData(ReadOnlyMemory<byte> data, IPEndPoint sender)
         {
-            var header = PacketHelper.GetHeader(data.Span);
+            // Drop datagrams that are not Rudp2p traffic (wrong magic number or unknown type)
+            if (!PacketHelper.TryGetHeader(data.Span, out var header)) return;
 
-            if (header.TotalSeqNum == 0)
+            if (header.Type == PacketType.Ack)
             {
-                // Ack Received
                 _reliableSender.ReportAck(header.PacketId, header.SeqId);
                 return;
             }
+
+            // Malformed data packet
+            if (header.TotalSeqNum == 0 || header.SeqId >= header.TotalSeqNum) return;
 
             var mergerKey = (sender, header.PacketId);
 
@@ -274,7 +277,7 @@ namespace Rudp2p
             if (socket == null) return;
 
             byte[] ackPacket = ArrayPool<byte>.Shared.Rent(PacketHeader.Size);
-            PacketHelper.SetHeader(ackPacket, new PacketHeader(packetId, (ushort)seq, 0, 0));
+            PacketHelper.SetHeader(ackPacket, new PacketHeader(PacketType.Ack, packetId, (ushort)seq, 0, 0));
             _ = SendAckAsync(socket, ackPacket, sender);
         }
 

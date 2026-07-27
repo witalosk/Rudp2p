@@ -75,7 +75,7 @@ namespace Rudp2p
                     int srcOffset = i * singlePayloadSize;
                     int payloadSize = Math.Min(singlePayloadSize, data.Length - srcOffset);
 
-                    PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(packetId, (ushort)i, (ushort)totalPackets, key));
+                    PacketHelper.SetHeader(sendBufferSegment, new PacketHeader(PacketType.Data, packetId, (ushort)i, (ushort)totalPackets, key));
                     data.Span.Slice(srcOffset, payloadSize).CopyTo(sendBufferSegment[PacketHeader.Size..]);
 
                     var packet = sendBufferSegment[..(payloadSize + PacketHeader.Size)];

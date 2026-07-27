@@ -1,21 +1,30 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
 namespace Rudp2p
 {
+    internal enum PacketType : byte
+    {
+        Data = 1,
+        Ack = 2,
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     internal struct PacketHeader
     {
+        public PacketType Type;
         public int PacketId;
         public ushort SeqId;
         public ushort TotalSeqNum;
         public int Key;
 
-        public const int Size = sizeof(int) * 2 + sizeof(ushort) * 2;
+        public const ushort MagicNumber = 0x5250;
+        public const int Size = sizeof(ushort) + sizeof(byte) + sizeof(int) * 2 + sizeof(ushort) * 2;
 
-        public PacketHeader(int packetId, ushort seqId, ushort totalSeqNum, int key)
+        public PacketHeader(PacketType type, int packetId, ushort seqId, ushort totalSeqNum, int key)
         {
+            Type = type;
             PacketId = packetId;
             SeqId = seqId;
             TotalSeqNum = totalSeqNum;
@@ -24,7 +33,7 @@ namespace Rudp2p
 
         public override string ToString()
         {
-            return $"PacketId: {PacketId}, SeqId: {SeqId}, TotalSeqNum: {TotalSeqNum}, Key: {Key}";
+            return $"Type: {Type}, PacketId: {PacketId}, SeqId: {SeqId}, TotalSeqNum: {TotalSeqNum}, Key: {Key}";
         }
     }
 
@@ -32,21 +41,37 @@ namespace Rudp2p
     {
         public static void SetHeader(Span<byte> buffer, PacketHeader header)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(buffer, header.PacketId);
-            BinaryPrimitives.WriteUInt16LittleEndian(buffer[4..], header.SeqId);
-            BinaryPrimitives.WriteUInt16LittleEndian(buffer[6..], header.TotalSeqNum);
-            BinaryPrimitives.WriteInt32LittleEndian(buffer[8..], header.Key);
+            BinaryPrimitives.WriteUInt16LittleEndian(buffer, PacketHeader.MagicNumber);
+            buffer[2] = (byte)header.Type;
+            BinaryPrimitives.WriteInt32LittleEndian(buffer[3..], header.PacketId);
+            BinaryPrimitives.WriteUInt16LittleEndian(buffer[7..], header.SeqId);
+            BinaryPrimitives.WriteUInt16LittleEndian(buffer[9..], header.TotalSeqNum);
+            BinaryPrimitives.WriteInt32LittleEndian(buffer[11..], header.Key);
         }
 
-        public static PacketHeader GetHeader(ReadOnlySpan<byte> data)
+        /// <summary>
+        /// Parses and validates a header. Returns false for datagrams that are too short,
+        /// have a wrong magic number, or an unknown packet type.
+        /// </summary>
+        public static bool TryGetHeader(ReadOnlySpan<byte> data, out PacketHeader header)
         {
-            return new PacketHeader
+            header = default;
+
+            if (data.Length < PacketHeader.Size) return false;
+            if (BinaryPrimitives.ReadUInt16LittleEndian(data) != PacketHeader.MagicNumber) return false;
+
+            byte type = data[2];
+            if (type != (byte)PacketType.Data && type != (byte)PacketType.Ack) return false;
+
+            header = new PacketHeader
             (
-                BinaryPrimitives.ReadInt32LittleEndian(data),
-                BinaryPrimitives.ReadUInt16LittleEndian(data[4..]),
-                BinaryPrimitives.ReadUInt16LittleEndian(data[6..]),
-                BinaryPrimitives.ReadInt32LittleEndian(data[8..])
+                (PacketType)type,
+                BinaryPrimitives.ReadInt32LittleEndian(data[3..]),
+                BinaryPrimitives.ReadUInt16LittleEndian(data[7..]),
+                BinaryPrimitives.ReadUInt16LittleEndian(data[9..]),
+                BinaryPrimitives.ReadInt32LittleEndian(data[11..])
             );
+            return true;
         }
 
         public static ReadOnlyMemory<byte> GetPayload(ReadOnlyMemory<byte> packetData)
