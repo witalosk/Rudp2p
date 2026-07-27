@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -20,15 +19,19 @@ namespace Rudp2p
 
         private IPEndPoint _remoteEndPoint;
         private CancellationTokenSource _cts;
-        private ConcurrentDictionary<int, PacketMerger> _packetMergers;
-        private readonly Dictionary<int, List<Action<Rudp2pReceiveData>>> _callbacks = new();
+        private ConcurrentDictionary<(IPEndPoint Sender, int PacketId), PacketMerger> _packetMergers;
+
+        private readonly ConcurrentDictionary<int, Action<Rudp2pReceiveData>[]> _callbacks = new();
+        private readonly object _callbackLock = new();
+
         private ReliableSender _reliableSender;
         private SynchronizationContext _originalContext;
 
         private readonly TimeSpan _cleanupInterval = TimeSpan.FromMilliseconds(100);
         private readonly TimeSpan _processedIdTimeout = TimeSpan.FromSeconds(1);
+        private readonly TimeSpan _incompleteMergerTimeout = TimeSpan.FromSeconds(5);
         private CancellationTokenSource _cleanupCts;
-        private readonly ConcurrentDictionary<int, DateTime> _processedPacketIds = new();
+        private readonly ConcurrentDictionary<(IPEndPoint Sender, int PacketId), DateTime> _processedPacketIds = new();
 
         public Rudp2pClient() { }
 
@@ -56,7 +59,7 @@ namespace Rudp2p
                 throw;
             }
 
-            _packetMergers = new ConcurrentDictionary<int, PacketMerger>();
+            _packetMergers = new ConcurrentDictionary<(IPEndPoint, int), PacketMerger>();
             _reliableSender = new ReliableSender(Config, new SendQueue(Config.SendBucketByteSize, Config.SendBucketRefillRate));
             _originalContext = SynchronizationContext.Current;
             _processedPacketIds.Clear();
@@ -99,12 +102,21 @@ namespace Rudp2p
         /// </summary>
         public IDisposable RegisterCallback(int key, Action<Rudp2pReceiveData> callback)
         {
-            if (!_callbacks.ContainsKey(key))
+            lock (_callbackLock)
             {
-                _callbacks[key] = new List<Action<Rudp2pReceiveData>>();
+                if (_callbacks.TryGetValue(key, out var existing))
+                {
+                    var updated = new Action<Rudp2pReceiveData>[existing.Length + 1];
+                    existing.CopyTo(updated, 0);
+                    updated[existing.Length] = callback;
+                    _callbacks[key] = updated;
+                }
+                else
+                {
+                    _callbacks[key] = new[] { callback };
+                }
             }
 
-            _callbacks[key].Add(callback);
             return new CallbackDisposer(this, callback);
         }
 
@@ -113,9 +125,18 @@ namespace Rudp2p
         /// </summary>
         public void UnregisterCallback(Action<Rudp2pReceiveData> callback)
         {
-            foreach (int key in _callbacks.Keys)
+            lock (_callbackLock)
             {
-                _callbacks[key].Remove(callback);
+                foreach (var pair in _callbacks)
+                {
+                    int index = Array.IndexOf(pair.Value, callback);
+                    if (index < 0) continue;
+
+                    var updated = new Action<Rudp2pReceiveData>[pair.Value.Length - 1];
+                    Array.Copy(pair.Value, 0, updated, 0, index);
+                    Array.Copy(pair.Value, index + 1, updated, index, pair.Value.Length - index - 1);
+                    _callbacks[pair.Key] = updated;
+                }
             }
         }
 
@@ -205,7 +226,9 @@ namespace Rudp2p
                 return;
             }
 
-            if (_processedPacketIds.ContainsKey(header.PacketId))
+            var mergerKey = (sender, header.PacketId);
+
+            if (_processedPacketIds.ContainsKey(mergerKey))
             {
                 SendAck(sender, header.PacketId, header.SeqId);
                 return;
@@ -213,11 +236,11 @@ namespace Rudp2p
             SendAck(sender, header.PacketId, header.SeqId);
 
             var payload = PacketHelper.GetPayload(data);
-            var packetMerger = _packetMergers.GetOrAdd(header.PacketId, _ => new PacketMerger(header.TotalSeqNum));
+            var packetMerger = _packetMergers.GetOrAdd(mergerKey, static (_, totalSeqNum) => new PacketMerger(totalSeqNum), header.TotalSeqNum);
 
             if (packetMerger.AddPacket(header.SeqId, payload))
             {
-                _processedPacketIds.TryAdd(header.PacketId, DateTime.Now);
+                _processedPacketIds.TryAdd(mergerKey, DateTime.UtcNow);
 
                 using (var owner = MemoryPool<byte>.Shared.Rent(packetMerger.ReceivedSize))
                 {
@@ -225,7 +248,7 @@ namespace Rudp2p
 
                     try
                     {
-                        if (_callbacks.TryGetValue(header.Key, out List<Action<Rudp2pReceiveData>> callbacks))
+                        if (_callbacks.TryGetValue(header.Key, out Action<Rudp2pReceiveData>[] callbacks))
                         {
                             var receiveData = new Rudp2pReceiveData { RemoteEndPoint = sender, Data = owner.Memory[..packetMerger.ReceivedSize] };
 
@@ -235,7 +258,7 @@ namespace Rudp2p
                             }
                         }
 
-                        _packetMergers.TryRemove(header.PacketId, out _);
+                        _packetMergers.TryRemove(mergerKey, out _);
                     }
                     finally
                     {
@@ -282,13 +305,26 @@ namespace Rudp2p
                 {
                     await Task.Delay(_cleanupInterval, token);
 
-                    DateTime cutoffTime = DateTime.Now - _processedIdTimeout;
+                    DateTime now = DateTime.UtcNow;
+                    DateTime cutoffTime = now - _processedIdTimeout;
 
                     foreach (var pair in _processedPacketIds)
                     {
                         if (pair.Value < cutoffTime)
                         {
                             _processedPacketIds.TryRemove(pair.Key, out _);
+                        }
+                    }
+                    
+                    var mergers = _packetMergers;
+                    if (mergers == null) continue;
+
+                    DateTime mergerCutoffTime = now - _incompleteMergerTimeout;
+                    foreach (var pair in mergers)
+                    {
+                        if (pair.Value.LastReceivedUtc < mergerCutoffTime && mergers.TryRemove(pair.Key, out var merger))
+                        {
+                            merger.Dispose();
                         }
                     }
                 }

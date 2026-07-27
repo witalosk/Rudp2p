@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using Random = System.Random;
 
@@ -10,8 +12,10 @@ namespace Rudp2p
 {
     internal class ReliableSender : IDisposable
     {
+        private static int _packetIdCounter = new Random().Next();
+
         private readonly SendQueue _sendQueue;
-        private readonly Dictionary<int, bool[]> _ackReceived = new();
+        private readonly ConcurrentDictionary<int, bool[]> _ackReceived = new();
         private readonly Rudp2pConfig _config;
 
         private const int _defaultBucketSize = 3000000;
@@ -36,11 +40,18 @@ namespace Rudp2p
                 throw new Exception($"Data is too large to send (Max size: {_config.Mtu * ushort.MaxValue - PacketHeader.Size} bytes)");
             }
 
-            int packetId = new Random().Next();
+            int packetId = Interlocked.Increment(ref _packetIdCounter);
             int singlePayloadSize = _config.Mtu - PacketHeader.Size;
             int totalPackets = (data.Length + singlePayloadSize - 1) / singlePayloadSize;
-            _ackReceived[packetId] = ArrayPool<bool>.Shared.Rent(totalPackets);
-            List<byte[]> sendBuffers = new();
+
+            bool[] ackReceived = null;
+            if (isReliable)
+            {
+                ackReceived = new bool[totalPackets];
+                _ackReceived[packetId] = ackReceived;
+            }
+
+            List<byte[]> sendBuffers = new(totalPackets);
 
             try
             {
@@ -62,14 +73,14 @@ namespace Rudp2p
                         tasks.Add
                         (
                             isReliable
-                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                                ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, ackReceived)
                                 : SendOrEnqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)])
                         );
                     }
                     else
                     {
                         await (isReliable
-                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, _ackReceived[packetId])
+                            ? SendWithRetry(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)], i, ackReceived)
                             : SendOrEnqueue(socket, target, sendBufferSegment[..(payloadSize + PacketHeader.Size)]));
                     }
                 }
@@ -82,14 +93,17 @@ namespace Rudp2p
                 {
                     ArrayPool<byte>.Shared.Return(sendBuffer);
                 }
-                ArrayPool<bool>.Shared.Return(_ackReceived[packetId]);
-                _ackReceived.Remove(packetId);
+                if (isReliable)
+                {
+                    _ackReceived.TryRemove(packetId, out _);
+                }
             }
         }
 
         public void ReportAck(int packetId, int seq)
         {
             if (!_ackReceived.TryGetValue(packetId, out bool[] value)) return;
+            if ((uint)seq >= (uint)value.Length) return;
             value[seq] = true;
         }
 
@@ -111,13 +125,10 @@ namespace Rudp2p
                     elapsedMs += 1;
                 }
 
-                if (ackReceived[seq]) break;
-
-                if (tryNum == _config.ReliableRetryCount - 1)
-                {
-                    Console.WriteLine($"[WARN] Packet {seq} lost after {_config.ReliableRetryCount} attempts");
-                }
+                if (ackReceived[seq]) return;
             }
+
+            throw new Rudp2pSendException($"Packet fragment {seq} was not acknowledged after {_config.ReliableRetryCount} attempts");
         }
 
         private Task SendOrEnqueue(Socket client, IPEndPoint target, ArraySegment<byte> data)
